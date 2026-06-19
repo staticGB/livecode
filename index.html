@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Live Code — Real-time HTML/CSS/JS Playground</title>
+<title>Live Code — Real-time HTML/CSS/JS + Python</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#1e1e1e;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -39,6 +39,14 @@ body{background:#1e1e1e;color:#eee;font-family:-apple-system,BlinkMacSystemFont,
 
 .editor-header{background:#252525;padding:5px 10px;font-size:11px;color:#888;display:flex;align-items:center;gap:8px;border-bottom:1px solid #333;flex-shrink:0}
 .editor-header span{font-weight:600;font-size:12px;color:#ccc}
+.editor-header .mode-tabs{display:flex;gap:0;margin-left:12px}
+.editor-header .mode-tab{padding:3px 12px;font-size:11px;border:1px solid #444;background:transparent;color:#888;cursor:pointer;transition:all .15s;border-radius:0}
+.editor-header .mode-tab:first-child{border-radius:4px 0 0 4px}
+.editor-header .mode-tab:last-child{border-radius:0 4px 4px 0}
+.editor-header .mode-tab.active{background:#ff6b6b;color:#fff;border-color:#ff6b6b}
+.editor-header .mode-tab:hover:not(.active){background:#333}
+.editor-header .py-status{font-size:10px;color:#888;margin-left:6px}
+.editor-header .py-status.ready{color:#4ade80}
 
 .editor-wrap{flex:1;display:flex;min-height:0}
 .gutter{width:40px;background:#1e1e1e;color:#555;text-align:right;padding:8px 4px;font-family:'Cascadia Code','Courier New',monospace;font-size:13px;line-height:1.5;overflow:hidden;user-select:none;flex-shrink:0;border-right:1px solid #2a2a2a}
@@ -56,6 +64,13 @@ textarea::placeholder{color:#555}
 .preview-header .reset-btn{background:transparent;border:1px solid #555;color:#aaa;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:10px;margin-left:6px}
 .preview-header .reset-btn:hover{color:#eee}
 iframe{flex:1;width:100%;border:none;background:#fff}
+.py-output{flex:1;width:100%;border:none;background:#0d1117;color:#c9d1d9;font-family:'Cascadia Code','Courier New',monospace;font-size:13px;line-height:1.5;padding:12px;overflow:auto;display:none;white-space:pre-wrap;word-break:break-all}
+.py-output .py-prompt{color:#58a6ff}
+.py-output .py-stdout{color:#c9d1d9}
+.py-output .py-stderr{color:#f85149}
+.py-output .py-loading{color:#d29922;font-style:italic}
+.py-output .py-cursor{display:inline-block;width:8px;height:15px;background:#58a6ff;animation:blink 1s step-end infinite;vertical-align:text-bottom;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
 
 /* Share modal */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center}
@@ -74,7 +89,7 @@ iframe{flex:1;width:100%;border:none;background:#fff}
 /* Chat panel */
 .chat-panel{background:#252525;border-top:1px solid #333;flex-shrink:0;max-height:200px;display:flex;flex-direction:column;transition:max-height .25s}
 .chat-panel.collapsed{max-height:36px}
-.chat-header{display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;border-bottom:1px solid #333;flex-shrink:0;user-select:none}
+.chat-header{display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;border-bottom:1px solid #333;flex-shrink:0;user-select:none;}
 .chat-header span{font-size:12px;font-weight:600;color:#aaa}
 .chat-header .chat-toggle{font-size:10px;color:#666;margin-left:auto;transition:transform .25s}
 .chat-panel.collapsed .chat-toggle{transform:rotate(-90deg)}
@@ -119,10 +134,15 @@ iframe{flex:1;width:100%;border:none;background:#fff}
   <div class="editor-pane">
     <div class="editor-header">
       <span>✏️ Code</span>
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="html" onclick="setMode('html')">HTML</button>
+        <button class="mode-tab" data-mode="python" onclick="setMode('python')">Python</button>
+      </div>
+      <span class="py-status" id="pyStatus"></span>
     </div>
     <div class="editor-wrap">
       <div class="gutter" id="gutter"></div>
-      <textarea id="editor" spellcheck="false" placeholder="Write HTML/CSS/JS here..." class="code-textarea"></textarea>
+      <textarea id="editor" spellcheck="false" placeholder="Write code here..." class="code-textarea"></textarea>
     </div>
   </div>
   <div class="preview-pane">
@@ -132,6 +152,7 @@ iframe{flex:1;width:100%;border:none;background:#fff}
       <button class="run-btn" onclick="runPreview()">&#9654; Run</button>
     </div>
     <iframe id="preview" sandbox="allow-scripts allow-modals"></iframe>
+    <div class="py-output" id="pyOutput"><span class="py-prompt">>>> </span><span class="py-cursor"></span></div>
   </div>
 </div>
 
@@ -175,11 +196,12 @@ iframe{flex:1;width:100%;border:none;background:#fff}
 
 <script>
 // ===== CONFIG =====
-// Set this to your deployed relay URL (or leave as-is for local-only mode)
 const DEFAULT_RELAY = "wss://jump-learners-efforts-midwest.trycloudflare.com";
+const PYODIDE_CDN = "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js";
 
 // ===== STATE =====
-const DEFAULT_CODE = `<!DOCTYPE html>
+const DEFAULT_CODE = {
+  html: `<!DOCTYPE html>
 <html>
 <head>
   <title>Live Code</title>
@@ -195,16 +217,31 @@ const DEFAULT_CODE = `<!DOCTYPE html>
     console.log('Live Code ready!');
   <\/script>
 </body>
-</html>`;
+</html>`,
+  python: `# Python mode — runs in browser via Pyodide (WebAssembly)
+import math
+import random
+
+print("🎉 Python on GitHub Pages!")
+print(f"Pi is roughly {math.pi:.4f}")
+
+# Make a simple list
+items = [random.randint(1, 100) for _ in range(5)]
+print(f"Random numbers: {items}")
+print(f"Sum: {sum(items)}, Avg: {sum(items)/len(items):.1f}")`
+};
 
 let editor = document.getElementById('editor');
 let preview = document.getElementById('preview');
+let pyOutput = document.getElementById('pyOutput');
 let gutter = document.getElementById('gutter');
 let statusBadge = document.getElementById('statusBadge');
 let peerCount = document.getElementById('peerCount');
 let roomInput = document.getElementById('roomInput');
+let pyStatus = document.getElementById('pyStatus');
 
-let currentCode = DEFAULT_CODE;
+let currentCode = DEFAULT_CODE.html;
+let currentMode = 'html';
 let ws = null;
 let roomId = '';
 let userId = '';
@@ -213,10 +250,152 @@ let lastEditAt = 0;
 let reconnectTimer = null;
 let reconnectDelay = 1000;
 let isReconnecting = false;
+let pyodideReady = false;
+let pyodide = null;
+let pendingPyCode = null;
 
 const BROADCAST_DEBOUNCE = 300;
 const REMOTE_SUPPRESS_WINDOW = 1500;
 const RECONNECT_MAX_DELAY = 15000;
+
+// ===== PYODIDE =====
+function loadPyodideRuntime() {
+  if (pyodideReady) return Promise.resolve();
+  if (window.__pyodideLoading) return window.__pyodideLoading;
+
+  pyStatus.textContent = '⏳ loading...';
+
+  window.__pyodideLoading = new Promise(async (resolve) => {
+    try {
+      // Load the Pyodide script
+      const script = document.createElement('script');
+      script.src = PYODIDE_CDN;
+      script.onload = async () => {
+        try {
+          pyodide = await globalThis.loadPyodide({
+            indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.25.0/full/'
+          });
+          pyodideReady = true;
+          pyStatus.textContent = '✓ ready';
+          pyStatus.className = 'py-status ready';
+          pyOutput.innerHTML = '<span class="py-prompt">>>> </span><span class="py-stdout">Python ready! Run your code.</span>\n<span class="py-prompt">>>> </span><span class="py-cursor"></span>';
+
+          if (pendingPyCode) {
+            executePython(pendingPyCode);
+            pendingPyCode = null;
+          }
+          resolve();
+        } catch (e) {
+          pyStatus.textContent = '✗ load failed';
+          pyOutput.innerHTML = '<span class="py-stderr">Failed to load Python: ' + escHtml(e.message) + '</span>';
+          resolve();
+        }
+      };
+      script.onerror = () => {
+        pyStatus.textContent = '✗ network error';
+        pyOutput.innerHTML = '<span class="py-stderr">Failed to download Pyodide from CDN. Check your internet connection.</span>';
+        resolve();
+      };
+      document.head.appendChild(script);
+    } catch (e) {
+      pyStatus.textContent = '✗ error';
+      resolve();
+    }
+  });
+
+  return window.__pyodideLoading;
+}
+
+function executePython(code) {
+  if (!pyodideReady || !pyodide) {
+    pendingPyCode = code;
+    loadPyodideRuntime();
+    pyOutput.innerHTML = '<span class="py-loading">⏳ Loading Python runtime (first time only)...</span><span class="py-cursor"></span>';
+    return;
+  }
+
+  pyOutput.innerHTML = '<span class="py-prompt">>>> </span><span class="py-stdout">Running...</span>';
+
+  // Redirect stdout/stderr
+  try {
+    pyodide.runPython(`
+import sys
+from io import StringIO
+_stdout = StringIO()
+_stderr = StringIO()
+sys.stdout = _stdout
+sys.stderr = _stderr
+`);
+    pyodide.runPython(code);
+    const stdout = pyodide.runPython('_stdout.getvalue()');
+    const stderr = pyodide.runPython('_stderr.getvalue()');
+    pyodide.runPython("sys.stdout = sys.__stdout__; sys.stderr = sys.__stderr__");
+
+    let html = '';
+    if (stdout) {
+      html += escHtml(stdout).split('\n').map(l => '<span class="py-stdout">' + l + '</span>').join('\n');
+    }
+    if (stderr) {
+      if (html) html += '\n';
+      html += escHtml(stderr).split('\n').map(l => '<span class="py-stderr">' + l + '</span>').join('\n');
+    }
+    if (!stdout && !stderr) {
+      html = '<span class="py-stdout" style="color:#666">(no output)</span>';
+    }
+    pyOutput.innerHTML = html + '\n<span class="py-prompt">>>> </span><span class="py-cursor"></span>';
+  } catch (e) {
+    const msg = e.message || String(e);
+    pyOutput.innerHTML = '<span class="py-stderr">' + escHtml(msg) + '</span>\n<span class="py-prompt">>>> </span><span class="py-cursor"></span>';
+    try { pyodide.runPython("sys.stdout = sys.__stdout__; sys.stderr = sys.__stderr__"); } catch(_) {}
+  }
+}
+
+// ===== MODE SWITCHING =====
+function setMode(mode) {
+  if (mode === currentMode) return;
+
+  // Save current code for this mode
+  const storageKey = 'livecode:' + getRoomKey() + ':mode:' + currentMode;
+  try { localStorage.setItem(storageKey, currentCode); } catch(e) {}
+
+  currentMode = mode;
+
+  // Update tab buttons
+  document.querySelectorAll('.mode-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.mode === mode);
+  });
+
+  // Show/hide preview elements
+  if (mode === 'html') {
+    preview.style.display = '';
+    pyOutput.style.display = 'none';
+  } else {
+    preview.style.display = 'none';
+    pyOutput.style.display = 'block';
+    loadPyodideRuntime();
+  }
+
+  // Load saved code for this mode
+  const savedKey = 'livecode:' + getRoomKey() + ':mode:' + mode;
+  let code;
+  try { code = localStorage.getItem(savedKey) || DEFAULT_CODE[mode]; } catch(e) { code = DEFAULT_CODE[mode]; }
+
+  currentCode = code;
+  editor.value = code;
+  updateGutter();
+
+  if (mode === 'html') {
+    runPreview();
+  } else {
+    // For Python, auto-run on switch if there's code
+    if (code.trim()) {
+      executePython(code);
+    }
+  }
+
+  // Broadcast mode change
+  sendUpdate(currentCode);
+}
 
 // ===== HELPERS =====
 function getRoomKey() {
@@ -224,7 +403,7 @@ function getRoomKey() {
 }
 
 function getStorageKey() {
-  return 'livecode:' + getRoomKey();
+  return 'livecode:' + getRoomKey() + ':mode:' + currentMode;
 }
 
 function loadCache() {
@@ -232,6 +411,10 @@ function loadCache() {
     const k = getStorageKey();
     const v = localStorage.getItem(k);
     if (v) currentCode = v;
+    else {
+      const fallback = DEFAULT_CODE[currentMode];
+      if (fallback) currentCode = fallback;
+    }
   } catch(e) {}
 }
 
@@ -249,6 +432,10 @@ function updateGutter() {
 }
 
 function runPreview() {
+  if (currentMode === 'python') {
+    executePython(editor.value);
+    return;
+  }
   preview.srcdoc = editor.value;
 }
 
@@ -265,7 +452,6 @@ function escHtml(s) {
 
 // ===== WEBRTC-ISH RELAY — WebSocket to a tiny relay server =====
 function getRelayUrl() {
-  // Try to use a configured relay, or prompt user
   return DEFAULT_RELAY && !DEFAULT_RELAY.includes('YOUR-DEPLOYED') ? DEFAULT_RELAY : null;
 }
 
@@ -314,7 +500,6 @@ function connectRelay() {
         if (msg.code != null) {
           applyRemoteCode(msg.code);
         } else {
-          // No code on server yet — send ours
           sendUpdate(currentCode);
         }
         break;
@@ -367,7 +552,7 @@ function scheduleReconnect() {
 
 function sendUpdate(code) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'update', room: roomId, code }));
+    ws.send(JSON.stringify({ type: 'update', room: roomId, code, mode: currentMode }));
   }
 }
 
@@ -408,6 +593,11 @@ editor.addEventListener('keydown', (e) => {
     editor.selectionStart = editor.selectionEnd = s + 2;
     editor.dispatchEvent(new Event('input'));
   }
+  // Run on Ctrl+Enter
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    runPreview();
+  }
 });
 
 // ===== ROOM MANAGEMENT =====
@@ -429,7 +619,7 @@ function joinRoom() {
 }
 
 function resetDefault() {
-  currentCode = DEFAULT_CODE;
+  currentCode = DEFAULT_CODE[currentMode] || '';
   editor.value = currentCode;
   saveCache();
   updateGutter();
@@ -447,7 +637,6 @@ function shareRoom() {
   document.getElementById('shareUrlDisplay').textContent = url;
   document.getElementById('shareModal').classList.add('open');
 
-  // QR code
   const qr = document.getElementById('qrcode');
   qr.innerHTML = '';
   if (typeof QRCode !== 'undefined') {
@@ -472,7 +661,6 @@ function copyShareLink() {
   alert('Link copied!');
 }
 
-// Close modal on overlay click
 document.getElementById('shareModal').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeShareModal();
 });
