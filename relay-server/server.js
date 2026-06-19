@@ -1,6 +1,6 @@
 // LiveCode relay server
-// Minimal WebSocket relay for syncing code across collaborators in real time.
-// No database — rooms live in memory for the lifetime of the process.
+// WebSocket relay for syncing code across collaborators in real time.
+// Persists room code to disk (data/rooms/<roomId>.json) so it survives restarts.
 //
 // Run locally:   node server.js
 // Tunnel:        cloudflared tunnel --url http://localhost:8787
@@ -8,8 +8,47 @@
 
 const { WebSocketServer } = require("ws");
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 
 const PORT = process.env.PORT || 8787;
+const DATA_DIR = path.join(__dirname, "data");
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+/**
+ * Persist room code to a JSON file. Each room gets its own file:
+ *   data/rooms/<roomId>.json  ->  { code: "..." }
+ */
+const PERSIST_DIR = path.join(DATA_DIR, "rooms");
+if (!fs.existsSync(PERSIST_DIR)) fs.mkdirSync(PERSIST_DIR, { recursive: true });
+
+function roomPath(roomId) {
+  // Sanitize room id to avoid path traversal
+  const safe = roomId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return path.join(PERSIST_DIR, safe + ".json");
+}
+
+function loadRoomCode(roomId) {
+  try {
+    const p = roomPath(roomId);
+    if (fs.existsSync(p)) {
+      const data = JSON.parse(fs.readFileSync(p, "utf8"));
+      return data.code || null;
+    }
+  } catch (e) {
+    console.error("Failed to load room data:", e.message);
+  }
+  return null;
+}
+
+function saveRoomCode(roomId, code) {
+  try {
+    const p = roomPath(roomId);
+    fs.writeFileSync(p, JSON.stringify({ code: code }), "utf8");
+  } catch (e) {
+    console.error("Failed to save room data:", e.message);
+  }
+}
 
 // room id -> { code: string, clients: Set<ws> }
 const rooms = new Map();
@@ -17,7 +56,7 @@ const rooms = new Map();
 function getRoom(roomId) {
   let room = rooms.get(roomId);
   if (!room) {
-    room = { code: null, clients: new Set() };
+    room = { code: loadRoomCode(roomId), clients: new Set() };
     rooms.set(roomId, room);
   }
   return room;
@@ -72,13 +111,22 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.type === "update" && joinedRoom) {
-      joinedRoom.code = msg.code;
-      broadcast(joinedRoom, { type: "update", code: msg.code }, ws);
+      joinedRoom.code = msg.data ? msg.data.code : msg.code;
+      var code = joinedRoom.code;
+      // Persist to disk so code survives restarts
+      saveRoomCode(roomId, code);
+      broadcast(joinedRoom, { type: "update", code: code }, ws);
       return;
     }
 
     if (msg.type === "chat" && joinedRoom) {
       broadcast(joinedRoom, { type: "chat", data: msg.data }, ws);
+      return;
+    }
+
+    // Relay all other messages (draw, clear, etc.) to everyone in the room
+    if (msg.type !== "join" && msg.type !== "update" && msg.type !== "chat" && joinedRoom) {
+      broadcast(joinedRoom, { type: msg.type, data: msg.data, sender: msg.sender }, ws);
       return;
     }
   });
