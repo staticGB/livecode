@@ -76,6 +76,11 @@ wss.on("connection", (ws) => {
       broadcast(joinedRoom, { type: "update", code: msg.code }, ws);
       return;
     }
+
+    if (msg.type === "chat" && joinedRoom) {
+      broadcast(joinedRoom, { type: "chat", data: msg.data }, ws);
+      return;
+    }
   });
 
   ws.on("close", () => {
